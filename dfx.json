@@ -10,6 +10,11 @@
     "finalproj_frontend": {
       "type": "assets",
       "source": ["dist"]
+    },
+    "internet_identity": {
+      "type": "custom",
+      "candid": "../internet-identity/.dfx/local/canisters/internet_identity/internet_identity.did",
+      "wasm": "../internet-identity/.dfx/local/canisters/internet_identity/internet_identity.wasm"
     }
   },
   "networks": {

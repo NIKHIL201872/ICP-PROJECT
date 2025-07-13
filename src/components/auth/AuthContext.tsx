@@ -3,22 +3,29 @@ import { AuthClient } from '@dfinity/auth-client';
 import { Actor, HttpAgent } from '@dfinity/agent';
 import { Principal } from '@dfinity/principal';
 
-// Your deployed backend canister ID
-const CANISTER_ID = 'ajuq4-ruaaa-aaaaa-qaaga-cai';
-const INTERNET_IDENTITY_CANISTER_ID = 'ahw5u-keaaa-aaaaa-qaaha-cai';
+// ✅ Use Vite env syntax
+const CANISTER_ID = import.meta.env.VITE_CANISTER_ID_FINALPROJ_BACKEND;
+const INTERNET_IDENTITY_CANISTER_ID = import.meta.env.VITE_CANISTER_ID_INTERNET_IDENTITY;
 
-// Create actor function
-const createActor = (canisterId: string, options?: { agentOptions?: any }) => {
+if (!CANISTER_ID || !INTERNET_IDENTITY_CANISTER_ID) {
+  throw new Error('Missing required environment variables');
+}
+
+const createActor = (canisterId: string, identity?: any) => {
+  const host = window.location.host.includes('localhost')
+    ? 'http://127.0.0.1:4943'
+    : 'https://ic0.app';
+
   const agent = new HttpAgent({
-    host: 'http://127.0.0.1:4943',
-    ...options?.agentOptions,
+    host,
+    identity
   });
 
-  // Fetch root key for local development
-  agent.fetchRootKey().catch(err => {
-    console.warn('Unable to fetch root key. Check to ensure that your local replica is running');
-    console.error(err);
-  });
+  if (host.includes('localhost')) {
+    agent.fetchRootKey().catch(err => {
+      console.warn('Unable to fetch root key:', err);
+    });
+  }
 
   return Actor.createActor(
     ({ IDL }) => {
@@ -81,10 +88,7 @@ const createActor = (canisterId: string, options?: { agentOptions?: any }) => {
         ),
       });
     },
-    {
-      agent,
-      canisterId,
-    }
+    { agent, canisterId }
   );
 };
 
@@ -99,144 +103,156 @@ interface AuthContextType {
   error: string | null;
 }
 
-export const AuthContext = createContext<AuthContextType>({
-  isAuthenticated: false,
-  principal: null,
-  authClient: null,
-  backendActor: null,
-  login: async () => {},
-  logout: async () => {},
-  loading: true,
-  error: null,
-});
+export const AuthContext = createContext<AuthContextType>(null!);
 
-interface AuthProviderProps {
-  children: ReactNode;
-}
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [state, setState] = useState({
+    isAuthenticated: false,
+    principal: null as Principal | null,
+    authClient: null as AuthClient | null,
+    backendActor: null as any,
+    loading: true,
+    error: null as string | null,
+  });
 
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [principal, setPrincipal] = useState<Principal | null>(null);
-  const [authClient, setAuthClient] = useState<AuthClient | null>(null);
-  const [backendActor, setBackendActor] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    initAuth();
-  }, []);
-
-  const initAuth = async () => {
+  const initializeAuth = async () => {
     try {
-      const client = await AuthClient.create();
-      setAuthClient(client);
+      const client = await AuthClient.create({
+        idleOptions: {
+          idleTimeout: 1000 * 60 * 30,
+        }
+      });
 
-      // Always create an actor for public queries
       const actor = createActor(CANISTER_ID);
-      setBackendActor(actor);
 
       if (await client.isAuthenticated()) {
         const identity = client.getIdentity();
         const principal = identity.getPrincipal();
-        
-        setIsAuthenticated(true);
-        setPrincipal(principal);
-        
-        // Create authenticated actor
-        const authenticatedActor = createActor(CANISTER_ID, {
-          agentOptions: {
-            identity,
-          },
+        const authActor = createActor(CANISTER_ID, identity);
+
+        setState({
+          isAuthenticated: true,
+          principal,
+          authClient: client,
+          backendActor: authActor,
+          loading: false,
+          error: null,
         });
-        setBackendActor(authenticatedActor);
+      } else {
+        setState(prev => ({
+          ...prev,
+          authClient: client,
+          backendActor: actor,
+          loading: false,
+        }));
       }
-      
-      setError(null);
     } catch (error) {
-      console.error('Auth initialization failed:', error);
-      setError(error instanceof Error ? error.message : 'Authentication initialization failed');
-      
-      // Still try to create an anonymous actor for public queries
-      try {
-        const actor = createActor(CANISTER_ID);
-        setBackendActor(actor);
-      } catch (actorError) {
-        console.error('Failed to create anonymous actor:', actorError);
-      }
-    } finally {
-      setLoading(false);
+      console.error('Initialization error:', error);
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Initialization failed',
+      }));
     }
   };
 
+  useEffect(() => {
+    initializeAuth();
+  }, []);
+
   const login = async () => {
-    if (!authClient) {
-      setError('Auth client not initialized');
-      return;
-    }
+    if (!state.authClient) return;
+
+    setState(prev => ({ ...prev, loading: true, error: null }));
 
     try {
-      setError(null);
-      await authClient.login({
-        identityProvider: `http://127.0.0.1:4943/?canisterId=${INTERNET_IDENTITY_CANISTER_ID}`,
+      await state.authClient.login({
+        identityProvider: `http://${INTERNET_IDENTITY_CANISTER_ID}.localhost:4943/#authorize`,
+        windowOpenerFeatures: `
+          width=500,
+          height=600,
+          toolbar=0,
+          scrollbars=1,
+          status=1,
+          resizable=1,
+          location=1,
+          menuBar=0
+        `,
         onSuccess: async () => {
-          const identity = authClient.getIdentity();
+          const identity = state.authClient!.getIdentity();
           const principal = identity.getPrincipal();
-          
-          setIsAuthenticated(true);
-          setPrincipal(principal);
-          
-          // Create authenticated actor
-          const actor = createActor(CANISTER_ID, {
-            agentOptions: {
-              identity,
-            },
+          const actor = createActor(CANISTER_ID, identity);
+
+          setState({
+            isAuthenticated: true,
+            principal,
+            authClient: state.authClient,
+            backendActor: actor,
+            loading: false,
+            error: null,
           });
-          setBackendActor(actor);
-          setError(null);
         },
-        onError: (error) => {
-          console.error('Login error:', error);
-          setError('Login failed. Please try again.');
+        onError: (err) => {
+          console.error('Login error:', err);
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            error: 'Login failed. Please try again.',
+          }));
         },
+        maxTimeToLive: BigInt(7 * 24 * 60 * 60 * 1000 * 1000 * 1000),
       });
     } catch (error) {
       console.error('Login failed:', error);
-      setError(error instanceof Error ? error.message : 'Login failed');
+      setState(prev => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Login failed',
+      }));
     }
   };
 
   const logout = async () => {
-    if (!authClient) return;
+    if (!state.authClient) return;
 
     try {
-      await authClient.logout();
-      setIsAuthenticated(false);
-      setPrincipal(null);
-      
-      // Create anonymous actor
+      await state.authClient.logout();
       const actor = createActor(CANISTER_ID);
-      setBackendActor(actor);
-      setError(null);
+
+      setState({
+        isAuthenticated: false,
+        principal: null,
+        authClient: state.authClient,
+        backendActor: actor,
+        loading: false,
+        error: null,
+      });
     } catch (error) {
       console.error('Logout failed:', error);
-      setError(error instanceof Error ? error.message : 'Logout failed');
+      setState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Logout failed',
+      }));
     }
   };
 
   return (
     <AuthContext.Provider
       value={{
-        isAuthenticated,
-        principal,
-        authClient,
-        backendActor,
+        ...state,
         login,
         logout,
-        loading,
-        error,
       }}
     >
       {children}
     </AuthContext.Provider>
   );
+};
+
+export const useAuth = () => {
+  const context = React.useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };

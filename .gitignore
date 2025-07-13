@@ -54,3 +54,4 @@ dist-ssr
 *.sln
 *.sw?
 .env
+*:Zone.Identifier

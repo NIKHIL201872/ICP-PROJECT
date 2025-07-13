@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:env" : "node ./scripts/update-env.js"
+
   },
   "dependencies": {
     "lucide-react": "^0.344.0",
